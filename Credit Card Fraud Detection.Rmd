@@ -1,0 +1,560 @@
+---
+title: "4058 Final Project"
+author: "Pranjal Bajaj & Padraig Mark"
+date: "12/6/2017"
+output: html_document
+---
+
+## Introduction
+
+Here we decide to investigate one of the most useful applications of machine learning techniques - whether credit card fraud has taken place on transactions or not. This is an important question for credit card companies for a number of reasons; one being that if a company were to be seen as prone to credit card theft then this would result in both the demise of its image as a credible and trustworthy company as well as perhaps an increase in fraudulent activity by fraudsters who deem the company as an 'easy target'. As such, it is becoming very important, in an ever more competitive market, for credit card companies to be able to accurately and efficiently detect instances of credit card fraud.
+
+Once a company detects what it seems to be fraudulent activity it can follow to main paths. Either a company can automatically block the transaction from happening or it can decide to follow up on the claim by calling, texting or emailing the customer who has potenially been defrauded. There are obvious costs to the credit card company with both these actions. In terms of automatically blocking transactions - customers can become fraustrated if credit card companies are blocking legitmate transactions that are thought to be fraudulent; this an example of the credit card company exhibiting bad customer experience. In terms of of following up with individuals on whether a transaction on their card was made by them or not - the costs associated to the credit card company are mostly one of the time and monetary costs to calling, emailing etc customers to check if they were the ones to make purchases. Therefore, it is in the interest of credit card companies to limit the number of false negatives (those are transaction they preidct to not be fraudulent but are actually instances of fraud) and false positives (predictions that are a transaction is fraudulent when in actual fact it is not).
+
+Therefore, in this investigate we will be trying to classify whether transactions are fraudulent or not.
+
+```{r}
+
+
+library(readr)
+
+cc_fraud <- read.csv("creditcard.csv")
+
+cc_fraud$Class <- as.factor(cc_fraud$Class)
+```
+
+In this investigation 'Class' is our outcome variable where it is coded as 0 if a transaction is not fraudulent and 1 if the transaction is fraudulent. Due to sensitivity, the predictors of interest are labelled V1 - V28, where they are the first 28 principle components of a large number of predictors of credit card fraud. We will be using these 28 prinicple components as well as the amount of the transaction to predict whether a transaction is fraudulent or not.
+
+# Data Inspection
+
+```{r}
+dim(cc_fraud) # Data Dimensions 
+```
+
+284807 observations.
+31 Variables (including the Class Variable).
+
+```{r}
+head(cc_fraud) # First 6 rows
+```
+We see that all but two features have Principal Component Analysis (PCA) scores associated. These scores are normalised/standardised i.e. mean 0 and standard deviation equal to 1. The two featues that aren't normalised are: 
+
+- Time 
+- Amount
+
+We may need to normalise them depending on the approach we use and processing time. Regardless, it is important to keep note of this.
+
+Ranges of these two variables:
+```{r}
+range(cc_fraud$Amount)
+range(cc_fraud$Time)
+```
+
+Checking if data has any missing values: 
+```{r eval = FALSE}
+is.na(cc_fraud) #FALSE for the entire dataset i.e. no missing values.
+```
+
+```{r}
+table(cc_fraud$Class)
+prop.table(table(cc_fraud$Class)) 
+```
+
+492 out of 2,84,315 or 0.173% of the credit card payments were fraudulent. 
+
+# Exploratory Data Analysis and Visualisation
+
+## Correlation Matrix Plot
+
+```{r}
+library(corrplot)
+
+cor.dat <- cc_fraud[, -c(1,31)]
+
+corrplot(cor(cor.dat))
+```
+
+This plot shows us a visualisation of the correlation matrix. The diagonal elements indicated by the dark blue dots show the correlation of the variables with themselves and hence are dark blue as they are perfectly correlated to themselves. 
+
+The only variable that seems to be correlated to others is 'Amount' while the principal component variables 1-28 are not correlated to each another in any way. We note that Amount is strongly positively correlated to V1, V2 and V5 and strongly negatively correlated to V6, V7 and V20. It is weakly correlated to V3,V4 and V8, V9, V10 and V21, V22, V23 and V25. 
+
+This implies that it would sense to drop this variable as it is somewhat captured by other variables and running the classification algorithms produced marginally higher accuracies for almost all algorithms used. 
+
+# Modelling and Predicting
+
+## Splitting Data into Test and Train
+
+Here we assign 75% of our data to the training set and the remaining to our testing set.
+
+We drop the time variable from our training and testing dataset because of erroros associated with including it in our later models.
+
+```{r}
+library(caret)
+set.seed(9598) 
+
+in_train <- createDataPartition(y = cc_fraud$Class,
+                                p = 3 / 4, list = FALSE) #75% train data #25% test data
+
+training <- cc_fraud[ in_train, ] 
+testing  <- cc_fraud[-in_train, ] 
+
+# Dropping time variable
+training <- training[, -1]
+testing <- testing [, -1]
+```
+
+```{r}
+table(training$Class)
+table(testing$Class)
+```
+
+Here, the training data set has 369 Frauds and the testing data set has 123 Frauds. 
+
+## Baseline: Logit Model
+
+We begin with a simple logit model. The idea is to get a sense of the predictive power of our model. 
+
+```{r}
+# Run the logit model
+logit <- glm(Class ~ ., data = training, family = binomial(link = "logit"))
+
+# Run predictions
+y_hat_logit <- predict(logit, newdata = testing, type = "response")
+
+# Assign classes
+z_logit <- as.integer(y_hat_logit > 0.15) 
+
+# Create the confusion matrix
+(t_log <- table(testing$Class, z_logit))
+
+sum(diag(t_log)) / sum(t_log)
+```
+We notice that an accuracy score of: 0.9991573. 
+
+Despite so many false positives and false negatives, our accuracy score is very high. This is because we only have 0.173% frauds in our data i.e. our data is highly imbalanced. Hence, we will need to use other approaches to measure our accuracy. We will rely on Area Under the Precision-Recall Curve (AUPRC). 
+
+Precision Score: The measure of correctness achieved in positive prediction i.e. of observations labeled as positive, how many are actually labeled positive.
+
+```{r}
+precision_logit <- 95 / (95+ 28)
+precision_logit
+```
+
+Looking at the Recall Score: 
+
+```{r}
+recall_logit <- 95 / (95 + 32)
+recall_logit
+```
+The model crumbles when this test is applied showing us scores of 77% for precision and 74% for recall. 
+
+Now calculaitng the Area Under the Precision-Recall Curve (AUPRC) we find:
+
+```{r}
+library(ROSE)
+roc.curve(testing$Class, z_logit, plotit = FALSE)
+```
+AUPRC: 88.2%
+
+## Approaches to Improve Accuracy
+
+In order to cure imbalances in our data, four traditional approaches are available: 
+
+1.  Undersample the majority class: Two ways ->
+(a) Random: Randomly chooses observations from majority class which are eliminated until the data set gets balanced 
+(b) Informative: Two ways ->
+- EasyEnsemble: At first, it extracts several subsets of independent sample (with replacement) from majority class. Then, it develops multiple classifiers based on combination of each subset with minority class. Works like an unsupervised learning algorithm.
+- BalanceCascade: It takes a supervised learning approach where it develops an ensemble of classifier and systematically selects which majority class to ensemble.
+
+2. Oversample the minorty class: It replicates the observations from minority class to balance the data. Two ways:
+(a) Random oversampling balances the data by randomly oversampling the minority class. 
+(b) Informative oversampling uses a pre-specified criterion and synthetically generates minority class observations.
+
+3. Synthetic Data Generation: Generates artificial data to balance the class imbalance.
+
+4. Cost Sensitive Learning (CSL): This method evaluates the cost associated with misclassifying observations.
+
+For our dataset, we will be using the undersampling approach, this method is best to use when the data set is huge and reducing the number of training samples helps to improve run time and storage troubles. However, to show results with a possible counterfactual, we also demonstrate Syntehtic Data Generation. 
+
+### Undersampling Majority Class: 
+
+```{r}
+undersampled_data <- ovun.sample(Class ~ ., data = training, method = "under", N = 5000, seed = 12345)$data
+table(undersampled_data$Class) 
+```
+
+
+### Synthetic Data Generation:
+
+```{r}
+synth_data <- ROSE(Class ~ ., data = training, seed = 123467)$data
+table(synth_data$Class)
+```
+
+As can be seen synthetic data generation creates a large number of random observations for the training dataset. 
+
+### Running the logit on the new data:
+
+#### 1. Undersampled Data:
+```{r}
+
+# Run the logit model
+logit_undersampled <- glm(Class ~ ., data = undersampled_data, family = binomial(link = "logit")) 
+
+# Run predictions
+y_hat_logit_undersampled <- predict(logit_undersampled, newdata = testing, type = "response")
+
+# Assign classes
+z_logit_undersampled <- as.integer(y_hat_logit_undersampled > 0.15)
+
+# Create the confusion matrix
+(t_log_undersampled <- table(testing$Class, z_logit_undersampled))
+
+# Predicting using the Area Under the Precision-Recall Curve (AUPRC)
+roc.curve(testing$Class, z_logit_undersampled, plotit = FALSE)
+```
+
+When running with Undersampled Data method, we obtain an accuracy of 94.6%. This is a vast improvement on the 88.2% we witnessed in the initial predictions we ran with the unbalanced dataset.
+
+#### 2. Synthetically Generated Data (SGD):
+```{r}
+
+# Run the logit model
+logit_synthdata <- glm(Class ~ ., data = synth_data, family = binomial(link = "logit")) 
+
+# Run predictions
+y_hat_logit_synthdata <- predict(logit_synthdata, newdata = testing, type = "response") #drop the first column in testing
+
+# Assign classes
+z_logit_synthdata <- as.integer(y_hat_logit_synthdata > 0.15)
+
+# Create the confusion matrix
+(t_log_synthdata <- table(testing$Class, z_logit_synthdata))
+
+# Predicting using the Area Under the Precision-Recall Curve (AUPRC)
+roc.curve(testing$Class, z_logit_synthdata, plotit = FALSE)
+```
+
+Again using this adapted training dataset we achieve an AUPRC score that is better than that of our first logit model with the unadpated data. However, this SDG method has produced a result that is only better than that of our original model (88.7% compared to 88.6%).
+ 
+In addition, it would be unsustainable for a credit card company to either prevent or investigate over 14,000 claims in order to find 120 instances of credit card fraud. It would be uneconomical for the company.
+ 
+As a result, going forward, we will be using the undersampled data: 
+ - Given our large dataset, undersampling allows us to run our programs much faster with better accuracy. 
+
+ Disadvantages: 
+ - We lose important information regarding the data by dropping lots of the observations while undersampling, however, we hope the fact that observations are dropped randomly will not affect our outcomes too negatively. 
+
+## k-Nearest Neighbours 
+
+### Formatting data for kNN:
+```{r}
+training_knn <- undersampled_data[, -ncol(undersampled_data)] #drop the Class column (last column) and drop the Time column (first column)
+testing_knn <- testing[,-c(ncol(testing))] #drop the Time column (first column)
+Class_train_knn <- as.factor(undersampled_data[,ncol(undersampled_data)])
+Class_test_knn <- as.factor(testing[,ncol(testing)])
+k <- sqrt(nrow(undersampled_data)) 
+training_knn$Amount <- scale(training_knn$Amount, center = TRUE, scale = TRUE) #Scale Amount Spent using Credit Card
+```
+
+```{r}
+library(class)
+library(ROSE)
+knn_pred <- knn(training_knn, testing_knn, Class_train_knn, k)
+
+#Confusion Matrix
+(t_knn <- table(Class_test_knn, knn_pred))
+
+#Measuring accuracy using Area under precision-recall curve
+roc.curve(testing$Class, knn_pred, plotit = FALSE)
+```
+
+Area under precision recall curve: 76.8%. This model is not good for classification at all. The logit, which is our baseline is far better as it gives us an accuracy of 94.6%.
+
+K nearest neighbors do not perform well in high dimensions due to the curse of dimensionality (k observations that are nearest to a given test observation x1 may be very far away from x1 in p-dimensional space when p is large [ An introduction to statistical learning, James/Witten/Hastie/Tibshirani, pages 108-109 ]), leading to a very poor k-nearest-neighbors fit. 
+
+## AIC Logit
+
+We now run an AIC on the logit model testing to see if dropping certain variables improves our results. 
+
+```{r warning=FALSE}
+# Run step function on logit model
+AIC_log <- step(logit_undersampled, trace = FALSE)
+
+# Show dropped variables
+setdiff(names(coef(logit_undersampled)), names(coef(AIC_log)))
+```
+
+We see above the variables that were dropped from the original logit model.
+
+Now we test the outcome:
+
+```{r}
+
+# Run predictions
+y_AIC_log <- predict(AIC_log, newdata = testing, type = "response")
+
+# Assign classes
+z_log_AIC <- as.integer(y_AIC_log > 0.15)
+
+# Create the confusion matrix
+(t_logA <- table(testing$Class, z_log_AIC))
+
+# AUPRC
+roc.curve(testing$Class, z_log_AIC, plotit = F)
+```
+
+We find that the AIC model above produces an AUPRC score of 94.3%. This is not an improvement on the 94.6% we predicted using the full set of variables for the logit model. 
+
+Therefore, moving forward we decide to include all variables in our model. Firstly, through the data: using all variables produces better results for us than dropping the variables when predicting using the logit model. Secondly, through intuition: the data has already been subsetted and principle componenets chosen. Thus the features identified V1 - V28 should realistically all have strong prediction power in the models.
+
+## BIC
+
+```{r warning=FALSE}
+BIC_log <- step(logit_undersampled, trace = FALSE, k = log(nrow(undersampled_data)))
+setdiff(names(coef(logit_undersampled)), names(coef(BIC_log)))
+```
+
+We can see the variables that BIC decide to drop and also notice that BIC drops some variables that AIC doesn't drop. BIC does a more thorough clean up of the predictors in the model.
+
+```{r}
+
+# Run predictions
+y_BIC_log <- predict(BIC_log, newdata = testing, type = "response")
+
+# Assign classes
+z_logit_BIC <- as.integer(y_BIC_log > 0.15)
+
+# Create the confusion matrix
+(t_logB <- table(testing$Class, z_logit_BIC))
+
+# AUPRC
+roc.curve(testing$Class, z_logit_BIC, plotit = F)
+```
+
+With an AUPRC score of 94.3%, the BIC method still performs slightly worse than the original logit model which scored 94.6%. With such close similarity and many of the same reasons given with regards to AIC, we decide to stick with the original logit model moving forward.
+
+## Linear Discriminant Analysis (LDA)
+
+We decide to run LDA on our variables in order to check if this model can be improved upon.
+
+```{r}  
+library(MASS)
+
+# LDA <- lda(formula(logit_undersampled), data = undersampled_data)
+
+# Set up LDA
+LDA <- lda(Class ~ ., data = undersampled_data)
+
+# Create predictions
+pred_lda <- predict(LDA, newdata = testing)
+
+z_LDA <- pred_lda$class
+
+# My changes so code can run
+roc.curve(testing$Class, z_LDA, plotit = FALSE)
+
+# My changes so code can run
+(t_LDA <- table(testing$Class, z_LDA))
+sum(diag(t_LDA)) / sum(t_LDA)
+```
+
+We find that running the LDA model we obtain an AUPRC score of 89.4%. This is not an improvement on the orignal logit model that we had ran.
+
+### QDA
+
+Since LDA could not produce more accurate results we decide to test if QDA can produce a better model in able to detect card fraud.
+
+```{r}
+
+# Set up QDA
+QDA <- qda(formula(logit_undersampled), data = undersampled_data)
+
+# Make predictions
+pred_qda <- predict(QDA, newdata = testing)
+
+# Present classifications
+z_QDA <- pred_qda$class 
+table(testing$Class, z_QDA)
+
+# Test
+roc.curve(testing$Class, z_QDA, plotit = F)
+```
+
+We observe that QDA does indeed improve on our results giving us a score of 92.9% which is better than that achieved by LDA. However, the results are not as accurate as that of the original logit model. 
+
+As we can see from the QDA confusion matrix, we are capturng a lot the vast majority of fraudulent activity. However, this comes at the cost of identifying more claims as fraudulent when they are not. Of course, credit card companies will want to espouse the principle of 'better safe than sorry' - however, it is efficient to reduce the number of false positives as this would result in lower costs for the credit card company in terms of following up with clients to check whether so and so activity on their card was fraudulent or not.
+
+# glmpath
+
+Moving on, in order to find improvements on our original model, we run a glmpath algorithm.
+
+```{r}
+# Set up of our Model
+X <- model.matrix(logit_undersampled)
+y <- undersampled_data$Class
+new_X <- model.matrix(logit, data = testing)
+```
+
+
+```{r}
+stopifnot(require(glmpath))
+
+# Run glmpath
+path1 <- glmpath(X, y == 1, nopenalty.subset = 1, 
+                 family = binomial(link = "logit"))
+summary(path1)
+
+# We identify that the step which gives us the lowest AIC score is step 42
+min(path1$aic)
+
+# Run the predictions with step 42
+y_hat_path1 <- predict(path1, newx = new_X, type = "response", 
+                       s = 42)
+
+z_path1 <- as.integer(y_hat_path1 > 0.15)
+table(testing$Class, z_path1)
+
+# AUPRC
+roc.curve(testing$Class, z_path1, plotit = F)
+```
+
+The algorithm produces some impressive predictions with an AUPRC of 94.7%. This is slightly better than our baseline logit model. Specifically, there are 25 less claims that the credit card company needs to check with glmpath than with the logit model (691 vs 666). 
+
+So far, the glmpath algorithm is the only one which comes close to our original logit model.
+
+
+## Decision Trees 
+
+We decide to also investigate decision trees in order to test if we could obtain better predictions of fraudulent actviity than what we could achieve under our best logit model.
+
+We begin with a simple tree method.
+
+```{r}
+library(tree)
+
+# Run the tree function
+out <- tree(Class ~. , data = undersampled_data)
+summary(out)
+
+# Run predictions
+y_hat_tree <- predict(out, newdata = testing, type = "class")
+
+# Create classifications
+z_tree <- as.integer(y_hat_tree)
+
+# Create the confusion matrix
+(t_tree <- table(testing$Class, z_tree))
+
+roc.curve(testing$Class, z_tree, plotit = F)
+```
+
+The results of our tree model are interesting. We obtain an AUPRC score of 92.5%. Although we are letting a little more fraud activity through the algorithm (18 undetected cases of fraud compared to 12 in logit), there are considerbly less observations which are falsely predicted to be fraudulent (273 compared to 691). This implies an efficiency in credit card companies to detect fraud without having to suspect so many cases. Nonetheless, the AUPRC remains lower because there are 6 more cases of fraud that went undetected in the model which turned out to be detrimental.
+
+## Boosting
+
+Since trees initially performed very well, we decide to develop more complex tree methods in order to improve our results.
+
+```{r}
+library(gbm)
+
+boosted <- gbm(Class == "1" ~ ., data = undersampled_data,
+               interaction.depth = 4, shrinkage = 0.001, 
+               n.cores = parallel::detectCores())
+
+summary(boosted)
+
+y_boost <- predict(boosted, newdata = testing, type = "response", 
+                       n.trees = 100)
+
+z_boost <- as.integer(y_boost > 0.15)
+
+(t_boost <- table(testing$Class, z_boost))
+
+roc.curve(testing$Class, z_boost, plotit = F)
+```
+
+Our boosting tree comes back with an AUPRC score of 87.8%. Although there are far less mischaraterised predictions of fraudulent behaviour (22), there are also a lot more cases of fraudulent activity that go undetected (30). We therefore, cannot characterise this as an improved model. 88.5% (93/105) of predicted frauds actually turn out to be instances of fraud.
+
+## Bagging
+
+We decide then to attempt bagging in order to obtain a more accurate decision tree than our simple tree and also a more accurate prediction than our original logit classification model.
+
+```{r}
+library(randomForest)
+# Run the bagged model
+bagged <- randomForest(Class ~ ., data = undersampled_data, mtry = ncol(undersampled_data) - 1, importance = TRUE)
+
+bagged
+
+# Create predictions
+z_bag <- predict(bagged, newdata = testing, type = "response")
+
+# Run the confusion matrix
+(t_bag <- table(testing$Class, z_bag))
+
+roc.curve(testing$Class, z_bag, plotit = F)
+```
+
+Bagging produces very impressive results. It has an AUPRC score of 93.4% which is lower than that of the orginal logit mdoel. However, arguably it provides a more accurate prediction. By far it is one of the most efficient in terms of predicted  turning fraudulent activity actually turning out to be cases of fraud (107 in 296 cases compared to 111 in 802 when using logit models). This is a large increase in efficiency which will result in lower costs for the credit card company.
+
+## Random Forest
+
+Lastly, we decide to run a random forest tree method.
+
+```{r}
+library(randomForest)
+
+# Run the random forest
+rf <- randomForest(Class ~ . , data = undersampled_data, importance = TRUE)
+
+# Predict
+rf_pred <- predict(rf, newdata = testing, type = "class")
+
+(rf_tab <- table(testing$Class, rf_pred))
+
+roc.curve(testing$Class, rf_pred, plotit = F)
+```
+
+The random forest produces excellent results. It captures the same number of incidents (107) as bagging but mischaracterises less incidents as fraud when they are not (59) compare to bragging (192). This indicates a large increase in efficiency even from the bagging method and certainly from the original logit model.
+
+Due to how well the random forest method works, we decide to run the model with the AIC and BIC formulas to see if we could obtain even better result than what had been produced.
+
+```{r}
+library(randomForest)
+
+# run random forest with AIC formula
+rf1 <- randomForest(AIC_log$formula, data = undersampled_data, importance = TRUE)
+
+rf_pred1 <- predict(rf1, newdata = testing, type = "class")
+
+(rf_tab1 <- table(testing$Class, rf_pred1))
+
+roc.curve(testing$Class, rf_pred1, plotit = F)
+```
+
+We find that we were able to capture one more result than the full random forest model (108 vs 107) but this comes at the expense of mischaracterising 10 more results as fraud when they are not (69 vs 59).
+
+When this was run with the BIC formula we found that the results were worse.
+
+Overall, the method using all predictors as the formula produces the best predictions for us.
+
+```{r}
+library(randomForest)
+rf2 <- randomForest(Class ~ . - Amount , data = undersampled_data, importance = TRUE)
+
+rf_pred2 <- predict(rf2, newdata = testing, type = "class")
+
+rf_tab2 <- table(testing$Class, rf_pred2)
+
+rf_tab2
+
+roc.curve(testing$Class, rf_pred2, plotit = F)
+```
+
+In conclusion, which models to adopt depend largely on the aims and aspirations of the credit card company. Our suggesting would be that if a credit card company wants to automatically cancel transactions that they deem to be fraudulent without first checking with the account occupier - then they should adopt the boosting tree method. With this tree method 88.5% of the activity classified as fraudulent turns out to indeed be fraudulent. Certainly compared to other methods, with this algorithm the credit card companies can be fairly certain that the transactions they have blocked are indeed acts of fraud and if they are not, they have good reason to be suspicious of such activity. 
+
+However, if a credit card company does not decide to automatically halt transactions it deems to be fraudulent but rather decides to alert it's customers perhaps by email, text or phone call - then we would want to be able to capture as many instances of fraud as possible. In this case, it depends what the method of communication with the customer is and how costly this method is. If the method are sending clients emails then this is less costly so card companies could adopt our baseline logit model that we presented at the beginning of this investigation. However, if the method of communication is calling and texting clients to make them aware that there may be fraudulent activity on a purchase then we would want to adopt a model with less false positives. In this case it would be best to adopt the random forest approach which captures a large number or fraudulent activity but also really minimises the number of false positives. 
+
+If we had to suggest only one method for credit card companies, the method we would opt for is the random forest method which accurately captures a large number of fraudulent activity and also limits the cost associated with getting false positives. 
+
